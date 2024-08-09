@@ -1,0 +1,322 @@
+rt=read.table(inputFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+Type=gsub("(.*)\\_(.*)\\_(.*)", "\\3", colnames(data))
+data=data[,order(Type)]
+Project=gsub("(.+)\\_(.+)\\_(.+)", "\\1", colnames(data))
+Type=gsub("(.*)\\_(.*)\\_(.*)", "\\3", colnames(data))
+colnames(data)=gsub("(.+)\\_(.+)\\_(.+)", "\\2", colnames(data))
+design <- model.matrix(~0+factor(Type))
+colnames(design) <- c("Control","Treat")
+fit <- lmFit(data,design)
+cont.matrix<-makeContrasts(Treat-Control,levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+allDiff=topTable(fit2,adjust='fdr',number=200000)
+allDiffOut=rbind(id=colnames(allDiff),allDiff)
+write.table(allDiffOut, file="all.txt", sep="\t", quote=F, col.names=F)
+diffSig=allDiff[with(allDiff, (abs(logFC)>logFCfilter & adj.P.Val < adj.P.Val.Filter )), ]
+diffSigOut=rbind(id=colnames(diffSig),diffSig)
+write.table(diffSigOut, file="diff.txt", sep="\t", quote=F, col.names=F)
+diffGeneExp=data[row.names(diffSig),]
+diffGeneExpOut=rbind(id=paste0(colnames(diffGeneExp),"_",Type), diffGeneExp)
+write.table(diffGeneExpOut, file="diffGeneExp.txt", sep="\t", quote=F, col.names=F)
+geneNum=50
+diffUp=diffSig[diffSig$logFC>0,]
+diffDown=diffSig[diffSig$logFC<0,]
+geneUp=row.names(diffUp)
+geneDown=row.names(diffDown)
+if(nrow(diffUp)>geneNum){geneUp=row.names(diffUp)[1:geneNum]}
+if(nrow(diffDown)>geneNum){geneDown=row.names(diffDown)[1:geneNum]}
+hmExp=data[c(geneUp,geneDown),]
+names(Type)=colnames(data)
+Type=as.data.frame(Type)
+Type=cbind(Project, Type)
+pdf(file="heatmap.pdf", width=10, height=7)
+pheatmap(hmExp, 
+         annotation=Type, 
+         color = colorRampPalette(c("blue2", "white", "red2"))(50),
+         cluster_cols =F,
+         show_colnames = F,
+         scale="row",
+         fontsize = 8,
+         fontsize_row=5.5,
+         fontsize_col=8)
+dev.off()
+rt=read.table("all.txt", header=T, sep="\t", check.names=F)
+Sig=ifelse((rt$adj.P.Val<adj.P.Val.Filter) & (abs(rt$logFC)>logFCfilter), ifelse(rt$logFC>logFCfilter,"Up","Down"), "Not")
+rt = mutate(rt, Sig=Sig)
+p = ggplot(rt, aes(logFC, -log10(adj.P.Val)))+
+    geom_point(aes(col=Sig))+
+    scale_color_manual(values=c("blue2", "grey","red2"))+
+    labs(title = " ")+
+theme(plot.title = element_text(size=16, hjust=0.5, face = "bold"))
+pdf(file="vol.pdf", width=5.5, height=4.5)
+print(p)
+dev.off()
+rt=read.table(inputFile, header=T, sep="\t", check.names=F)
+outTab=data.frame()
+for(id in rt$ID) {
+	expoData=extract_instruments(id,
+                                 p1 = 5e-08, p2 = 5e-08,
+                                 clump = T,
+                                 kb = 10000, r2 = 0.001)
+    outTab=rbind(outTab, expoData)
+}
+write.csv(outTab, file="exposure_data.csv", row.names=F)
+inputFile="exposure_data.csv" 
+dat=read.csv(inputFile, header=T, sep=",", check.names=F)
+dat$R2<-(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)/(2*dat$beta.exposure*dat$beta.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)+2*dat$se.exposure*dat$se.exposure*dat$samplesize.exposure*dat$eaf.exposure*(1-dat$eaf.exposure)))
+dat$F<-dat$R2*(dat$samplesize.exposure-2)/(1-dat$R2)
+outTab=dat[as.numeric(dat$F)>10,]
+write.csv(outTab, file="exposure.F.csv", row.names=F)
+exposure_dat=read_exposure_data(filename=exposureFile,
+                                sep = ",",
+                                snp_col = "SNP",
+                                beta_col = "beta.exposure",
+                                se_col = "se.exposure",
+                                pval_col = "pval.exposure",
+                                effect_allele_col="effect_allele.exposure",
+                                other_allele_col = "other_allele.exposure",
+                                eaf_col = "eaf.exposure",
+                                phenotype_col = "exposure",
+                                id_col = "id.exposure",
+                                samplesize_col = "samplesize.exposure",
+                                chr_col="chr.exposure", pos_col = "pos.exposure",
+                                clump=FALSE)
+outcomeData=extract_outcome_data(snps=exposure_dat$SNP, outcomes=outcomeID)
+write.csv(outcomeData, file="outcome.csv", row.names=F)
+outcomeData$outcome=outcomeName
+dat=harmonise_data(exposure_dat, outcomeData)
+outTab=dat[dat$mr_keep=="TRUE",]
+write.csv(outTab, file="table.SNP.csv", row.names=F)
+mrResult=mr(dat)
+mrTab=generate_odds_ratios(mrResult)
+write.csv(mrTab, file="table.MRresult.csv", row.names=F)
+heterTab=mr_heterogeneity(dat)
+write.csv(heterTab, file="table.heterogeneity.csv", row.names=F)
+pleioTab=mr_pleiotropy_test(dat)
+write.csv(pleioTab, file="table.pleiotropy.csv", row.names=F)
+pdf(file="pic.scatter_plot.pdf", width=7.5, height=7)
+mr_scatter_plot(mrResult, dat)
+dev.off()
+res_single=mr_singlesnp(dat)
+pdf(file="pic.forest.pdf", width=7, height=5.5)
+mr_forest_plot(res_single)
+dev.off()
+pdf(file="pic.funnel_plot.pdf", width=7, height=6.5)
+mr_funnel_plot(singlesnp_results = res_single)
+dev.off()
+pdf(file="pic.leaveoneout.pdf", width=7, height=5.5)
+mr_leaveoneout_plot(leaveoneout_results = mr_leaveoneout(dat))
+dev.off()
+rt=read.csv(mrFile, header=T, sep=",", check.names=F)
+ivw=data.frame()
+for(geneName in unique(rt$exposure)){
+	geneData=rt[rt$exposure==geneName,]
+		if(nrow(geneData)==5){
+		if(geneData[geneData$method=="Inverse variance weighted","pval"]<0.05){
+			if(sum(geneData$or>1)==nrow(geneData) | sum(geneData$or<1)==nrow(geneData)){
+				ivw=rbind(ivw, geneData)
+			}
+		}
+	}
+}
+pleRT=read.csv(pleFile, header=T, sep=",", check.names=F)
+pleRT=pleRT[pleRT$pval>0.05,]
+immuneLists=as.vector(pleRT$exposure)
+outTab=ivw[ivw$exposure %in% immuneLists,]
+write.csv(outTab, file="IVW.filter.csv", row.names=F)
+data=data.frame()
+for(i in files){
+  rt=read.csv(i, header=T, sep=",", check.names=F)
+  data=rbind(data, rt)
+}
+data=data[(data$method %in% selectMethod),]
+lineVec=cumsum(c(1,table(data[,"exposure"])))
+data$' ' <- paste(rep(" ", 10), collapse = " ")
+data$'OR(95% CI)'=ifelse(is.na(data$or), "", sprintf("%.3f (%.3f to %.3f)", data$or, data$or_lci95, data$or_uci95))
+data$pval = ifelse(data$pval<0.001, "<0.001", sprintf("%.3f", data$pval))
+data$exposure = ifelse(is.na(data$exposure), "", data$exposure)
+data$nsnp = ifelse(is.na(data$nsnp), "", data$nsnp)
+data[duplicated(data$exposure),]$exposure=""
+tm <- forest_theme(base_size = 18, 
+                   ci_pch = 16, ci_lty = 1, ci_lwd = 1.5, ci_col = "black", ci_Theight = 0.2, 
+                   refline_lty="dashed", refline_lwd=1, refline_col="grey20",
+                   xaxis_cex=0.8,
+                   footnote_cex = 0.6, footnote_col = "blue")
+plot <- forestploter::forest(data[, c("exposure","nsnp","method","pval"," ","OR(95% CI)")],
+                             est = data$or,
+                             lower = data$or_lci95,
+                             upper = data$or_uci95,
+                             ci_column = 5,
+                             ref_line = 1,
+                             xlim = c(0.75, 1.25),
+                             theme = tm,)
+boxcolor = c("#E64B35","#4DBBD5","#00A087","#3C5488","#F39B7F","#8491B4","#91D1C2","#DC0000","#7E6148")
+boxcolor = boxcolor[as.numeric(as.factor(data$method))]
+for(i in 1:nrow(data)){
+  plot <- edit_plot(plot, col=5,row = i, which = "ci", gp = gpar(fill = boxcolor[i],fontsize=25))}
+pos_bold_pval = which(as.numeric(gsub('<',"",data$pval))<0.05)
+if(length(pos_bold_pval)>0){
+  for(i in pos_bold_pval){
+    plot <- edit_plot(plot, col=4,row = i, which = "text", gp = gpar(fontface="bold"))    }
+}
+plot <- add_border(plot, part = "header", row =1,where = "top",gp = gpar(lwd =2))
+plot <- add_border(plot, part = "header", row = lineVec, gp = gpar(lwd =1))
+plot <- edit_plot(plot, col=1:ncol(data),row = 1:nrow(data), which = "text", gp = gpar(fontsize=12))
+plot <- edit_plot(plot, col = 1:ncol(data), which = "text",hjust = unit(0.5, "npc"),part="header",
+                  x = unit(0.5, "npc"))
+plot <- edit_plot(plot, col = 1:ncol(data), which = "text",hjust = unit(0.5, "npc"),
+                  x = unit(0.5, "npc"))
+pdf("forest.pdf", width=11, heigh=8)
+print(plot)
+dev.off()
+rt=read.table(expFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+data=data[rowMeans(data)>0,]
+Type=gsub("(.*)\\_(.*)\\_(.*)", "\\3", colnames(data))
+data=data[,Type=="Treat",drop=F]
+dataL=data[,data[gene,]<median(data[gene,]),drop=F]
+dataH=data[,data[gene,]>=median(data[gene,]),drop=F]
+meanL=rowMeans(dataL)
+meanH=rowMeans(dataH)
+meanL[meanL<0.00001]=0.00001
+meanH[meanH<0.00001]=0.00001
+logFC=meanH-meanL
+logFC=sort(logFC, decreasing=T)
+genes=names(logFC)
+gmt=read.gmt(gmtFile)
+kk=GSEA(logFC, TERM2GENE=gmt, pvalueCutoff = 1)
+kkTab=as.data.frame(kk)
+kkTab=kkTab[kkTab$pvalue<0.05,]
+write.table(kkTab,file="GSEA.result.txt",sep="\t",quote=F,row.names = F)
+termNum=5
+kkUp=kkTab[kkTab$NES>0,]
+if(nrow(kkUp)>=termNum){
+	showTerm=row.names(kkUp)[1:termNum]
+	gseaplot=gseaplot2(kk, showTerm, base_size=8, title=paste0("Enriched in high ", gene, " group"))
+	pdf(file="GSEA.highExp.pdf", width=6.5, height=5.5)
+	print(gseaplot)
+	dev.off()
+}
+termNum=5
+kkDown=kkTab[kkTab$NES<0,]
+if(nrow(kkDown)>=termNum){
+	showTerm=row.names(kkDown)[1:termNum]
+	gseaplot=gseaplot2(kk, showTerm, base_size=8, title=paste0("Enriched in low ", gene, " group"))
+	pdf(file="GSEA.lowExp.pdf", width=6.5, height=5.5)
+	print(gseaplot)
+	dev.off()
+}
+rt=read.table(expFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+geneSets=getGmt(gmtFile, geneIdType=SymbolIdentifier())
+ssgseaScore=gsva(data, geneSets, method='ssgsea', kcdf='Gaussian', abs.ranking=TRUE)
+normalize=function(x){
+  return((x-min(x))/(max(x)-min(x)))}
+ssgseaScore=normalize(ssgseaScore)
+ssgseaOut=rbind(id=colnames(ssgseaScore), ssgseaScore)
+write.table(ssgseaOut,file="ssGSEA.result.txt",sep="\t",quote=F,col.names=F)
+con=grepl("_con", colnames(rt), ignore.case=T)
+treat=grepl("_treat", colnames(rt), ignore.case=T)
+conData=rt[,con]
+treatData=rt[,treat]
+conNum=ncol(conData)
+treatNum=ncol(treatData)
+rt=t(cbind(conData,treatData))
+outTab=data.frame()
+pdf(file="vioplot.pdf", width=13, height=8.5)
+par(las=1,mar=c(10,6,3,3))
+x=c(1:ncol(rt))
+y=c(1:ncol(rt))
+plot(x,y,
+     xlim=c(0,(3*ncol(rt)-3)),ylim=c(min(rt),max(rt)+0.05),
+     main="",xlab="", ylab="Fraction",
+     pch=21,
+     col="white",
+     xaxt="n")
+for(i in 1:ncol(rt)){
+	  if(sd(rt[1:conNum,i])==0){
+	    rt[1,i]=0.00001
+	  }
+	  if(sd(rt[(conNum+1):(conNum+treatNum),i])==0){
+	    rt[(conNum+1),i]=0.00001
+	  }
+	  conData=rt[1:conNum,i]
+	  treatData=rt[(conNum+1):(conNum+treatNum),i]
+	  vioplot(conData,at=3*(i-1),lty=1,add = T,col = 'blue')
+	  vioplot(treatData,at=3*(i-1)+1,lty=1,add = T,col = 'red')
+	  wilcoxTest=wilcox.test(conData,treatData)
+	  p=wilcoxTest$p.value
+	  if(p<0.05){
+	      cellPvalue=cbind(Cell=colnames(rt)[i],pvalue=p)
+		  outTab=rbind(outTab,cellPvalue)
+	  }
+	  mx=max(c(conData,treatData))
+	  lines(c(x=3*(i-1)+0.2,x=3*(i-1)+0.8),c(mx,mx))
+	  text(x=3*(i-1)+0.5, y=mx+0.02, labels=ifelse(p<0.001, paste0("p<0.001"), paste0("p=",sprintf("%.03f",p))), cex = 0.8)
+}
+legend("topright", 
+       c("Control", "DN"),
+       lwd=3,bty="n",cex=1,
+       col=c("blue","red"))
+text(seq(1,(3*ncol(rt)-2),3),-0.075,xpd = NA,labels=colnames(rt),cex = 1,srt = 45,pos=2)
+dev.off()
+write.table(outTab,file="immuneDiff.xls",sep="\t",row.names=F,quote=F)
+data = read.table(inputFile, header=T, sep="\t", check.names=F)
+p.col = c('gold','pink','orange','LimeGreen','darkgreen')
+fcolor = function(x,p.col){
+  color = ifelse(x>0.8,p.col[1],ifelse(x>0.6,p.col[2],ifelse(x>0.4,p.col[3],
+                ifelse(x>0.2,p.col[4], p.col[5])
+                )))
+  return(color)
+}
+p.cex = seq(2.5, 5.5, length=5)
+fcex = function(x){
+  x=abs(x)
+  cex = ifelse(x<0.1,p.cex[1],ifelse(x<0.2,p.cex[2],ifelse(x<0.3,p.cex[3],
+              ifelse(x<0.4,p.cex[4],p.cex[5]))))
+  return(cex)
+}
+points.color = fcolor(x=data$pvalue,p.col=p.col)
+data$points.color = points.color
+points.cex = fcex(x=data$cor)
+data$points.cex = points.cex
+data=data[order(data$cor),]
+pdf(file="Lollipop.pdf", width=9.5, height=7)
+xlim = ceiling(max(abs(data$cor))*10)/10
+layout(mat=matrix(c(1,1,1,1,1,0,2,0,3,0),nc=2),width=c(8,2.2),heights=c(1,2,1,2,1))
+par(bg="white",las=1,mar=c(5,18,2,4),cex.axis=1.5,cex.lab=2)
+plot(1,type="n",xlim=c(-xlim,xlim),ylim=c(0.5,nrow(data)+0.5),xlab="Correlation Coefficient",ylab="",yaxt="n",yaxs="i",axes=F)
+rect(par('usr')[1],par('usr')[3],par('usr')[2],par('usr')[4],col="#F5F5F5",border="#F5F5F5")
+grid(ny=nrow(data),col="white",lty=1,lwd=2)
+segments(x0=data$cor,y0=1:nrow(data),x1=0,y1=1:nrow(data),lwd=4)
+points(x=data$cor,y = 1:nrow(data),col = data$points.color,pch=16,cex=data$points.cex)
+text(par('usr')[1],1:nrow(data),data$Cell,adj=1,xpd=T,cex=1.5)
+pvalue.text=ifelse(data$pvalue<0.001,'<0.001',sprintf("%.03f",data$pvalue))
+redcutoff_cor=0
+redcutoff_pvalue=0.05
+text(par('usr')[2],1:nrow(data),pvalue.text,adj=0,xpd=T,col=ifelse(abs(data$cor)>redcutoff_cor & data$pvalue<redcutoff_pvalue,"red","black"),cex=1.5)
+axis(1,tick=F)
+par(mar=c(0,4,3,4))
+plot(1,type="n",axes=F,xlab="",ylab="")
+legend("left",legend=c(0.1,0.2,0.3,0.4,0.5),col="black",pt.cex=p.cex,pch=16,bty="n",cex=2,title="abs(cor)")
+par(mar=c(0,6,4,6),cex.axis=1.5,cex.main=2)
+barplot(rep(1,5),horiz=T,space=0,border=NA,col=p.col,xaxt="n",yaxt="n",xlab="",ylab="",main="pvalue")
+axis(4,at=0:5,c(1,0.8,0.6,0.4,0.2,0),tick=F)
+dev.off()
